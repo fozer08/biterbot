@@ -39,6 +39,27 @@ class SignalGenerator(ABC):
         """
         ...
 
+class TestSignalGen(SignalGenerator):
+
+    def __init__(
+        self,
+        client,
+        name, symbol, interval,
+    ):
+        super().__init__(client, name, symbol, interval)
+
+    async def check(self, df: pd.DataFrame) -> Optional[str]:
+        """
+        Args:
+            df: OHLCV DataFrame.
+        Return:
+            Optional[str]: LONG/SHORT veya None.
+        """
+        if df.empty:
+            return None
+        
+        return self.LONG
+    
 class EMACrossSignalGen(SignalGenerator):
     """Kısa/uzun EMA kesişimine dayalı sinyal üretimi."""
 

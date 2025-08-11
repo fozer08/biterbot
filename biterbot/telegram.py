@@ -182,7 +182,8 @@ def format_signal_message(payload: Dict[str, Any]) -> str:
 
 
 class TelegramSink:
-    """EventBus sinyallerini Telegram'a ileten yardımcı.
+    """
+    EventBus sinyallerini Telegram'a ileten yardımcı.
 
     Varsayılan olarak "signal:*" desenine abone olur ve her sinyalde
     biçimlendirilmiş bir mesaj gönderir.
@@ -209,12 +210,8 @@ class TelegramSink:
         self._bound = False
 
     def bind(self) -> None:
-        """EventBus aboneliğini aktif eder.
-
-        Args:
-            None
-        Return:
-            None
+        """
+        EventBus aboneliğini aktif eder.
         """
         if self._bound:
             return
@@ -222,12 +219,8 @@ class TelegramSink:
         self._bound = True
 
     def unbind(self) -> None:
-        """EventBus aboneliğini kaldırır.
-
-        Args:
-            None
-        Return:
-            None
+        """
+        EventBus aboneliğini kaldırır.
         """
         if not self._bound:
             return
@@ -240,8 +233,6 @@ class TelegramSink:
         Args:
             payload: Sinyal verisi.
             msg_id: EventBus mesaj kimliği (genellikle close_time).
-        Return:
-            None
         """
         try:
             text = format_signal_message(payload)

@@ -21,22 +21,19 @@ async def main():
     trend_xrp_1h = TrendSignalGen(client, "trend_xrp_1h", "XRPUSDT", "1h")
     trend_eth_1d = TrendSignalGen(client, "trend_eth_1d", "ETHUSDT", "1d")
     trend_xrp_1d = TrendSignalGen(client, "trend_xrp_1d", "XRPUSDT", "1d")
-    # Test için
-    trend_eth_1m = TrendSignalGen(client, "trend_eth_1d", "ETHUSDT", "1m", hysteresis_threshold=0.001)
 
     # Adaptörler
     SignalAdaptor(bus, trend_eth_1h).bind()
     SignalAdaptor(bus, trend_xrp_1h).bind()
     SignalAdaptor(bus, trend_eth_1d).bind()
     SignalAdaptor(bus, trend_xrp_1d).bind()
-    SignalAdaptor(bus, trend_eth_1m).bind()
+
+    # Test için
+    test_signal = TelegramSink(client, "test_signal", "ETHUSDT", "1m")
+    SignalAdaptor(bus, test_signal).bind()
 
     # Telegram entegrasyonu
-    tg_sender = TelegramSender(
-        token="8290926257:AAFv1sdhY9Pbjp90L2TTUXAPsk9E7pigKTE",
-        chat_id="-4927151540"
-    )
-    tg = TelegramSink(bus, sender=tg_sender)
+    tg = TelegramSink(bus)
     tg.bind()
 
     # Konsola da yazmaya devam edebilir
