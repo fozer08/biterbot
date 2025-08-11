@@ -32,10 +32,6 @@ async def main():
     SignalAdaptor(bus, trend_eth_1m).bind()
 
     # Telegram entegrasyonu
-    tg_sender = TelegramSender(
-        token="8290926257:AAFv1sdhY9Pbjp90L2TTUXAPsk9E7pigKTE",
-        chat_id="-4927151540"
-    )
     tg = TelegramSink(bus, sender=tg_sender)
     tg.bind()
 
