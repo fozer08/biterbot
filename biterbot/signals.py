@@ -58,6 +58,7 @@ class TestSignalGen(SignalGenerator):
         if df.empty:
             return None
         
+        print("1")
         return self.LONG
     
 class EMACrossSignalGen(SignalGenerator):

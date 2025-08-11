@@ -13,24 +13,20 @@ async def main():
 
     # Feed'i başlat
     feed = OhlcvFeed(client, bus, limit=200, buffer_seconds=2)
-    feed.start("BTCUSDT", "1m")
-    feed.start("SOLUSDT", "1m")
+    feed.start("ETHUSDT", "1h")
+    feed.start("XRPUSDT", "1h")
+    feed.start("XRPUSDT", "15m")
 
     # Stratejiler
     trend_eth_1h = TrendSignalGen(client, "trend_eth_1h", "ETHUSDT", "1h")
     trend_xrp_1h = TrendSignalGen(client, "trend_xrp_1h", "XRPUSDT", "1h")
-    trend_eth_1d = TrendSignalGen(client, "trend_eth_1d", "ETHUSDT", "1d")
-    trend_xrp_1d = TrendSignalGen(client, "trend_xrp_1d", "XRPUSDT", "1d")
+    trend_xrp_15m = TrendSignalGen(client, "trend_xrp_15m", "XRPUSDT", "15m")
 
     # Adaptörler
     SignalAdaptor(bus, trend_eth_1h).bind()
     SignalAdaptor(bus, trend_xrp_1h).bind()
-    SignalAdaptor(bus, trend_eth_1d).bind()
-    SignalAdaptor(bus, trend_xrp_1d).bind()
+    SignalAdaptor(bus, trend_xrp_15m).bind()
 
-    # Test için
-    test_signal = TelegramSink(client, "test_signal", "ETHUSDT", "1m")
-    SignalAdaptor(bus, test_signal).bind()
 
     # Telegram entegrasyonu
     tg = TelegramSink(bus)
@@ -39,7 +35,7 @@ async def main():
     # Konsola da yazmaya devam edebilir
     async def on_any_signal(payload, msg_id):
         print("[SIGNAL]", msg_id, payload)
-
+    
     bus.subscribe("signal:*", on_any_signal)
 
     await feed.wait_forever()
