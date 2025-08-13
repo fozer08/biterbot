@@ -1,241 +1,238 @@
-"""Telegram entegrasyonu
+"""
+Telegram Entegrasyonu
 
-Bu modül, EventBus üzerindeki sinyal yayınlarını yakalayıp Telegram'a
-otomatik iletmek için basit bir yardımcı sağlar.
+- EventBus üzerinde bir veya birden çok pattern'e abone olur (örn. "signal:*", "decision:*").
+- Her pattern için ayrı bir formatter kullanılabilir.
+- Gönderim async'tir; hafif hız sınırlaması içerir.
+- Varsayılan olarak signal dict'lerini (name/symbol/interval/direction/strength/at/price) biçimlendirir.
 
 Kullanım (main.py içinde):
-    from .telegram import TelegramSink
+    import os
+    from .telegram import TelegramSink, format_signal_message
 
-    bus = EventBus()
-    # ... feed, strateji/adaptör kurulumları ...
-    tg = TelegramSink(bus)  # TOKEN/CHAT_ID ortam değişkenlerinden okunur
-    tg.bind()               # varsayılan olarak "signal:*" pattern'ine abone olur
-
-Gerekli ortam değişkenleri:
-    TELEGRAM_BOT_TOKEN = "123456:ABCDEF..."
-    TELEGRAM_CHAT_ID   = "123456789"  # kullanıcı ya da grup/chat id
-
-Bağımlılıklar:
-    aiohttp
-
-Notlar:
-- Mesaj biçimi HTML'dir. İsterseniz parse_mode parametresi ile MarkdownV2'a
-  da çevirebilirsiniz.
-- Bu modül yalnızca mesaj göndermek içindir; polling/webhook kurulumu yoktur.
+    tg = TelegramSink(
+        bus,
+        token=os.getenv("TELEGRAM_BOT_TOKEN"),
+        chat_id=os.getenv("TELEGRAM_CHAT_ID"),
+        subscriptions={
+            "signal:*": format_signal_message,     # gösterge sinyalleri
+            # ileride karar/pozisyon katmanı eklendiğinde:
+            # "decision:*": format_decision_message,
+            # "position:*": format_position_message,
+        },
+    )
+    tg.bind()
 """
-from __future__ import annotations
-
-import os
-import json
 import asyncio
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
-
-import aiohttp
+import json
+import os
+import time
+from typing import Any, Callable, Dict, Optional
 
 from .eventbus import EventBus
-
-__all__ = [
-    "TelegramSender",
-    "TelegramSink",
-    "format_signal_message",
-]
+from .signals import Signal
 
 
-@dataclass
-class TelegramSender:
-    """Basit Telegram Bot API istemcisi.
-
-    Args:
-        token: Bot token. None ise TELEGRAM_BOT_TOKEN ortamından okunur.
-        chat_id: Mesajın gönderileceği chat. None ise TELEGRAM_CHAT_ID ortamından okunur.
-        session: Dışarıdan verilen aiohttp.ClientSession (opsiyonel).
-        parse_mode: "HTML" veya "MarkdownV2". Varsayılan: "HTML".
-        disable_web_page_preview: Link önizlemelerini kapat.
-
-    Return:
-        None
-    """
-
-    token: Optional[str] = None
-    chat_id: Optional[str] = None
-    session: Optional[aiohttp.ClientSession] = None
-    parse_mode: str = "HTML"
-    disable_web_page_preview: bool = True
-
-    def __post_init__(self) -> None:
-        if self.token is None:
-            self.token = os.getenv("TELEGRAM_BOT_TOKEN") or None
-        if self.chat_id is None:
-            self.chat_id = os.getenv("TELEGRAM_CHAT_ID") or None
-        if not self.token:
-            print("[telegram] Uyarı: TELEGRAM_BOT_TOKEN tanımlı değil.")
-        if not self.chat_id:
-            print("[telegram] Uyarı: TELEGRAM_CHAT_ID tanımlı değil.")
-
-    @property
-    def _base_url(self) -> str:
-        return f"https://api.telegram.org/bot{self.token}" if self.token else ""
-
-    async def send_message(self, text: str) -> None:
-        """Telegram'a mesaj gönder.
-
-        Args:
-            text: Gönderilecek metin.
-        Return:
-            None
-        """
-        if not self.token or not self.chat_id:
-            return
-
-        url = f"{self._base_url}/sendMessage"
-        payload = {
-            "chat_id": self.chat_id,
-            "text": text,
-            "parse_mode": self.parse_mode,
-            "disable_web_page_preview": self.disable_web_page_preview,
-        }
-
-        # Basit retry: geçici ağ hataları için 3 deneme
-        last_err: Optional[Exception] = None
-        for attempt in range(3):
-            try:
-                if self.session is None:
-                    async with aiohttp.ClientSession() as s:
-                        async with s.post(url, json=payload, timeout=10) as resp:
-                            if resp.status == 200:
-                                return
-                            body = await resp.text()
-                            raise RuntimeError(f"sendMessage {resp.status}: {body}")
-                else:
-                    async with self.session.post(url, json=payload, timeout=10) as resp:
-                        if resp.status == 200:
-                            return
-                        body = await resp.text()
-                        raise RuntimeError(f"sendMessage {resp.status}: {body}")
-            except Exception as e:
-                last_err = e
-                await asyncio.sleep(0.5)
-        if last_err:
-            print(f"[telegram] Hata: {last_err}")
-
-
-def _ms_to_iso(ms: Optional[int]) -> str:
-    """ms epoch'u ISO8601 UTC'ye çevirir."""
-    if not ms:
+# ----------------------------------------------------------------------------
+# Yardımcı biçimlendirme
+# ----------------------------------------------------------------------------
+def _fmt_ts(ts: Optional[int]) -> str:
+    """ms/s farkını otomatik ayıkla ve 'YYYY-mm-dd HH:MM:SS' döndür."""
+    if ts is None:
         return "-"
-    dt = datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
-    return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    # saniye mi milisaniye mi?
+    if ts > 10_000_000_000:  # ~ 2001-2286 arası ms
+        secs = ts / 1000.0
+    else:
+        secs = float(ts)
+    lt = time.localtime(secs)
+    return time.strftime("%Y-%m-%d %H:%M:%S", lt)
 
 
-def format_signal_message(payload: Dict[str, Any]) -> str:
-    """Sinyal payload'unu Telegram için biçimlendirir.
+def _fmt_float(x: Any, precision: int = 4, dash_on_none: bool = True) -> str:
+    if x is None:
+        return "-" if dash_on_none else ""
+    try:
+        return f"{float(x):.{precision}f}"
+    except Exception:
+        return str(x)
 
-    Beklenen payload (adapters.SignalAdaptor ile uyumlu):
-        {
-          "name": str,
-          "symbol": str,
-          "interval": str,
-          "trade_signal": "LONG"|"SHORT"|"EXIT",
-          "close_time": int  # ms
-        }
 
-    Args:
-        payload: EventBus ile gelen sinyal sözlüğü.
-    Return:
-        str: HTML biçiminde mesaj.
+# ----------------------------------------------------------------------------
+# Formatters
+# ----------------------------------------------------------------------------
+def format_generic_message(obj: Any) -> str:
+    """Herhangi bir dict/objeyi pretty JSON olarak gönderir."""
+    try:
+        txt = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), indent=2)
+    except Exception:
+        txt = str(obj)
+    # Telegram code block
+    return f"<pre>{txt}</pre>"
+
+
+def format_signal_message(sig: Signal) -> str:
     """
-    name = str(payload.get("name", "-"))
-    symbol = str(payload.get("symbol", "-"))
-    interval = str(payload.get("interval", "-"))
-    signal = str(payload.get("trade_signal", "-"))
-    close_time = int(payload.get("close_time", 0) or 0)
+    Beklenen alanlar:
+      name, symbol, interval, direction("UP"|"DOWN"|None), strength, at, price
+    """
+    name = sig.get("at", "-")
+    symbol = sig.get("symbol", "-")
+    interval = sig.get("interval", "-")
+    direction = sig.get("direction")
+    strength = sig.get("strength")
+    ts = sig.get("at")
+    price = sig.get("price")
 
-    emoji = {
-        "LONG": "🟢",
-        "SHORT": "🔴",
-        "EXIT": "⚪",
-    }.get(signal, "🔔")
+    arrow = "🔼" if direction == "UP" else ("🔽" if direction == "DOWN" else "•")
+    st_txt = _fmt_float(strength, 4)
+    pr_txt = _fmt_float(price, 8)
+    ts_txt = _fmt_ts(ts)
 
-    fields = [
-        f"<b>{emoji} Sinyal</b>",
-        f"• Strateji: <b>{name}</b>",
-        f"• Enstrüman: <b>{symbol}</b>",
-        f"• Periyot: <b>{interval}</b>",
-        f"• Yön: <b>{signal}</b>",
+    lines = [
+        f"{arrow} <b>{name}</b>",
+        f"• {symbol} / {interval}",
+        f"• direction: <b>{direction or '-'}</b>",
+        f"• strength: <code>{st_txt}</code>",
+        f"• price: <code>{pr_txt}</code>",
+        f"• at: <code>{ts_txt}</code>",
     ]
-
-    if close_time:
-        fields.append(f"• Kapanış: <code>{_ms_to_iso(close_time)}</code>")
-
-    # Opsiyonel: kalan alanları bir önizleme olarak ekle (çok uzunsa kısalt)
-    extras = {k: v for k, v in payload.items() if k not in {
-        "name", "symbol", "interval", "trade_signal", "close_time"}}
-    if extras:
-        preview = json.dumps(extras, ensure_ascii=False)
-        if len(preview) > 400:
-            preview = preview[:400] + "…"
-        fields.append(f"• Detay: <code>{preview}</code>")
-
-    return "\n".join(fields)
+    return "\n".join(lines)
 
 
+# ----------------------------------------------------------------------------
+# Telegram gönderici
+# ----------------------------------------------------------------------------
+class TelegramSender:
+    """Telegram Bot API göndereni (async, stdlib tabanlı)."""
+
+    def __init__(
+        self,
+        token: str,
+        chat_id: str,
+        *,
+        parse_mode: str = "HTML",
+        min_interval: float = 0.5,   # flood koruması
+        timeout: float = 10.0,
+    ) -> None:
+        if not token or not chat_id:
+            raise ValueError("TelegramSender: token/chat_id gerekli.")
+        self._token = token
+        self._chat_id = chat_id
+        self._parse_mode = parse_mode
+        self._min_interval = float(min_interval)
+        self._timeout = float(timeout)
+        self._last_send = 0.0
+        self._lock = asyncio.Lock()
+
+    async def send_message(self, text: str, disable_web_page_preview: bool = True) -> None:
+        """Mesaj gönderir (stdlib HTTP)."""
+        import urllib.request
+        import urllib.parse
+
+        async with self._lock:
+            # basit hız sınırı
+            now = time.monotonic()
+            wait = self._min_interval - (now - self._last_send)
+            if wait > 0:
+                await asyncio.sleep(wait)
+
+            url = f"https://api.telegram.org/bot{self._token}/sendMessage"
+            data = {
+                "chat_id": self._chat_id,
+                "text": text,
+                "parse_mode": self._parse_mode,
+                "disable_web_page_preview": "true" if disable_web_page_preview else "false",
+            }
+            body = urllib.parse.urlencode(data).encode()
+
+            def _post():
+                req = urllib.request.Request(url, data=body, method="POST")
+                with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                    return resp.read()
+
+            try:
+                await asyncio.to_thread(_post)
+            finally:
+                self._last_send = time.monotonic()
+
+
+# ----------------------------------------------------------------------------
+# EventBus -> Telegram
+# ----------------------------------------------------------------------------
 class TelegramSink:
     """
-    EventBus sinyallerini Telegram'a ileten yardımcı.
-
-    Varsayılan olarak "signal:*" desenine abone olur ve her sinyalde
-    biçimlendirilmiş bir mesaj gönderir.
+    EventBus -> Telegram köprüsü.
 
     Args:
         bus: EventBus örneği.
-        sender: Özelleştirilebilir TelegramSender. None ise varsayılan oluşturulur.
-        topic_pattern: Abone olunacak topic ya da pattern. Varsayılan: "signal:*".
+        token, chat_id: Opsiyonel; verilmezse ortamdan okunur.
+        subscriptions: pattern -> formatter fonksiyonu haritası.
+            Formatter imzası: Callable[[Dict[str, Any]], str]
 
-    Return:
-        None
+    Notlar:
+        - EventBus callback imzası: cb(payload, msg_id)
+        - Topic adı callback'e geçmiyor; her pattern için ayrı handler oluşturuluyor.
     """
 
     def __init__(
         self,
         bus: EventBus,
-        sender: Optional[TelegramSender] = None,
         *,
-        topic_pattern: str = "signal:*",
+        token: Optional[str] = None,
+        chat_id: Optional[str] = None,
+        subscriptions: Optional[Dict[str, Callable[[Dict[str, Any]], str]]] = None,
+        parse_mode: str = "HTML",
+        min_interval: float = 0.5,
+        timeout: float = 10.0,
     ) -> None:
         self.bus = bus
-        self.sender = sender or TelegramSender()
-        self.topic_pattern = topic_pattern
+        self.token = token or os.getenv("TELEGRAM_BOT_TOKEN", "")
+        self.chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID", "")
+        if not self.token or not self.chat_id:
+            raise ValueError("TelegramSink: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID eksik.")
+
+        # Varsayılan: sadece signal:* dinle
+        self.subscriptions: Dict[str, Callable[[Dict[str, Any]], str]] = subscriptions or {
+            "signal:*": format_signal_message
+        }
+
+        self.sender = TelegramSender(
+            self.token, self.chat_id,
+            parse_mode=parse_mode, min_interval=min_interval, timeout=timeout
+        )
+        self._handlers: Dict[str, Callable[[Dict[str, Any], int], Any]] = {}
         self._bound = False
 
     def bind(self) -> None:
-        """
-        EventBus aboneliğini aktif eder.
-        """
         if self._bound:
             return
-        self.bus.subscribe(self.topic_pattern, self._on_signal)
+
+        for pattern, formatter in self.subscriptions.items():
+            async def _handler(
+                payload: Dict[str, Any], 
+                msg_id: int, 
+                *args, 
+                _fmt=formatter, _pat=pattern, 
+                **kwargs
+            ) -> None:
+                try:
+                    try:
+                        text = _fmt(payload)
+                    except Exception:
+                        text = format_generic_message(payload)
+                    await self.sender.send_message(text)
+                except Exception as e:
+                    print(f"[telegram] gönderim hatası ({_pat}): {e}")
+
+            self._handlers[pattern] = _handler
+            self.bus.subscribe(pattern, _handler)
         self._bound = True
 
     def unbind(self) -> None:
-        """
-        EventBus aboneliğini kaldırır.
-        """
         if not self._bound:
             return
-        self.bus.unsubscribe(self.topic_pattern, self._on_signal)
+        for pattern, handler in list(self._handlers.items()):
+            self.bus.unsubscribe(pattern, handler)
+        self._handlers.clear()
         self._bound = False
-
-    async def _on_signal(self, payload: Dict[str, Any], msg_id: int) -> None:
-        """EventBus callback'i: sinyali biçimlendirip gönderir.
-
-        Args:
-            payload: Sinyal verisi.
-            msg_id: EventBus mesaj kimliği (genellikle close_time).
-        """
-        try:
-            text = format_signal_message(payload)
-            await self.sender.send_message(text)
-        except Exception as e:
-            print(f"[telegram] gönderim hatası: {e}")

@@ -6,6 +6,7 @@ from .clients import PublicClient
 from .helpers import Interval, Topics
 from .eventbus import EventBus
 
+
 class OhlcvFeed:
     """
     OHLCV verisini periyodik olarak çekip EventBus'a yayınlar.
@@ -35,23 +36,55 @@ class OhlcvFeed:
     def start(self, symbol: str, interval: str) -> None:
         """
         Belirli (symbol, interval) için yayın yapan görev başlat.
-
-        Args:
-            symbol: Enstrüman sembolü.
-            interval: Periyot.
+        Aynı key zaten çalışıyorsa no-op (idempotent).
         """
-        key = (symbol, interval)
+        key = (str(symbol), str(interval))
         if key in self._tasks:
             return
         self._tasks[key] = asyncio.create_task(self._run(symbol, interval))
 
+    def start_many(self, *items) -> None:
+        """
+        Birden fazla feed'i tek seferde başlatır.
+
+        Kullanım örnekleri:
+            feed.start_many(("ETHUSDT","15m"), ("ETHUSDT","1h"))
+            feed.start_many({"ETHUSDT": ["15m","1h","4h"], "XRPUSDT": ["15m"]})
+
+        Notlar:
+            - Aynı (symbol, interval) çifti bu çağrı içinde birden fazla verilse bile
+              yalnızca bir kez işlenir.
+            - Zaten aktif olanlar (daha önce start edilmiş olanlar) tekrar başlatılmaz.
+        """
+        pairs = []
+
+        # Tek argüman dict ise {symbol: [intervals]} formatını aç
+        if len(items) == 1 and isinstance(items[0], dict):
+            mapping = items[0]
+            for sym, ivs in mapping.items():
+                for iv in ivs:
+                    pairs.append((str(sym), str(iv)))
+        else:
+            # Varargs: ("SYM","INT") ikilileri
+            for it in items:
+                if isinstance(it, (tuple, list)) and len(it) == 2:
+                    pairs.append((str(it[0]), str(it[1])))
+                else:
+                    raise ValueError(f"Geçersiz pair: {it!r} — ('SYMBOL','INTERVAL') veya dict beklenir")
+
+        # Aynı çağrı içindeki tekrarları eliyoruz
+        seen = set()
+        for sym, iv in pairs:
+            key = (sym, iv)
+            if key in seen:
+                continue
+            seen.add(key)
+            # Zaten aktifse start() içi no-op
+            self.start(sym, iv)
+
     async def _run(self, symbol: str, interval: str):
         """
         İç döngü: bar kapanışlarına hizalan, veri çek ve yayınla.
-
-        Args:
-            symbol: Enstrüman.
-            interval: Periyot.
         """
         sec = Interval(interval).seconds
         topic = Topics.ohlcv(symbol, interval)

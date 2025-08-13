@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, TypedDict, Literal
 import pandas as pd
 import numpy as np
 import ta
@@ -7,202 +7,232 @@ import ta
 from .clients import PublicClient
 
 
+SignalDirection = Optional[Literal["UP", "DOWN"]]
+
+class Signal(TypedDict, total=False):
+    # Zorunlu alanlar
+    name: str
+    symbol: str
+    interval: str
+    direction: SignalDirection      # "UP" | "DOWN" | None
+    strength: float                 # anlamlılık metriği (örn. ratio - threshold)
+    at: int                         # close_time
+    price: float                    # close_price
+
+
 class SignalGenerator(ABC):
     """
-    Strateji temel sınıfı; `check(df)` sinyal üretir veya None döner.
-
-    Args:
-        client: Veri kaynağı.
-        name: Strateji adı.
-        symbol: Enstrüman sembolü.
-        interval: Periyot.
+    Gösterge katmanı: check(df) bir 'signal' (dict) döndürür ya da None.
     """
-    
-    LONG = "LONG"
-    SHORT = "SHORT"
-    EXIT = "EXIT"
 
-    def __init__(self, client: PublicClient, name: str, symbol: str, interval: str):
-        self.client = client
+    def __init__(self, name: str, symbol: str, interval: str):
         self.name = name
         self.symbol = symbol
         self.interval = interval
 
     @abstractmethod
-    async def check(self, df: pd.DataFrame) -> Optional[str]:
+    async def check(
+        self,
+        df: pd.DataFrame = None,
+        client: PublicClient = None
+    ) -> Optional[Signal]:
         """
-        Verilen df üzerinde sinyal hesapla.
-
         Args:
-            df: OHLCV DataFrame.
+            df: OHLCV DataFrame; verilmezse client ile çekilebilir.
+            client: df yoksa kullanılacak erişimci.
         Return:
-            Optional[str]: Sinyal (LONG/SHORT/EXIT) veya None.
+            Optional[Signal]: Gösterge sinyali veya None.
         """
         ...
 
 
-class TestSignalGen(SignalGenerator):
-
-    def __init__(
-        self,
-        client,
-        name, symbol, interval,
-    ):
-        super().__init__(client, name, symbol, interval)
-
-    async def check(self, df: pd.DataFrame) -> Optional[str]:
-        """
-        Args:
-            df: OHLCV DataFrame.
-        Return:
-            Optional[str]: LONG/SHORT veya None.
-        """
-        if df.empty:
-            return None
-        
-        print("1")
-        return self.LONG
-
-
 class EMACrossSignalGen(SignalGenerator):
-    """Kısa/uzun EMA kesişimine dayalı sinyal üretimi."""
+    """Kısa/uzun EMA kesişimini 'direction' ve 'strength' ile bildirir."""
 
     def __init__(
         self,
-        client,
-        name, symbol, interval,
+        name: str, symbol: str, interval: str,
         *,
-        ema_short_window=7, ema_long_window=25,
+        ema_short_window: int = 7,
+        ema_long_window: int = 25,
     ):
-        super().__init__(client, name, symbol, interval)
+        super().__init__(name, symbol, interval)
         self.ema_short_window = ema_short_window
         self.ema_long_window = ema_long_window
 
-    async def check(self, df: pd.DataFrame) -> Optional[str]:
-        """
-        Args:
-            df: OHLCV DataFrame.
-        Return:
-            Optional[str]: LONG/SHORT veya None.
-        """
-        if df.empty:
-            return None
-        
+    async def check(self, df: pd.DataFrame = None, client: PublicClient = None) -> Optional[Signal]:
         need = max(self.ema_short_window, self.ema_long_window) + 2
-        if len(df) < need:
+
+        # df yoksa client'tan çek
+        if df is None:
+            if client is None:
+                return None
+            try:
+                df = client.fetch_ohlcv(
+                    symbol=self.symbol,
+                    interval=self.interval,
+                    limit=need,
+                    last_candle_completed=True,
+                )
+            except Exception:
+                return None
+
+        if df is None or df.empty or len(df) < need:
             return None
-        
-        df['ema_short'] = ta.trend.ema_indicator(df['close'], window=self.ema_short_window)
-        df['ema_long'] = ta.trend.ema_indicator(df['close'], window=self.ema_long_window)
+
+        df = df.copy()
+        df["ema_short"] = ta.trend.ema_indicator(df["close"], window=self.ema_short_window)
+        df["ema_long"]  = ta.trend.ema_indicator(df["close"], window=self.ema_long_window)
+
         last, prev = df.iloc[-1], df.iloc[-2]
-        
-        if pd.isna(last['ema_long']) or pd.isna(prev['ema_long']):
+        if pd.isna(last["ema_long"]) or pd.isna(prev["ema_long"]):
             return None
-        
-        crossed_up = prev['ema_short'] < prev['ema_long'] and last['ema_short'] > last['ema_long']
-        crossed_dn = prev['ema_short'] > prev['ema_long'] and last['ema_short'] < last['ema_long']
-        
-        if crossed_up:
-            return self.LONG
-        if crossed_dn:
-            return self.SHORT
-        
-        return None
+
+        crossed_up = prev["ema_short"] < prev["ema_long"] and last["ema_short"] > last["ema_long"]
+        crossed_dn = prev["ema_short"] > prev["ema_long"] and last["ema_short"] < last["ema_long"]
+        if not (crossed_up or crossed_dn):
+            return None
+
+        direction: SignalDirection = "UP" if crossed_up else "DOWN"
+        base = max(abs(last["ema_long"]), 1e-12)
+        strength = (last["ema_short"] - last["ema_long"]) / base  # normalize fark
+        close_time = int(last.get("close_time", 0))
+        price = float(last.get("close", np.nan))
+
+        return {
+            "name": self.name,
+            "symbol": self.symbol,
+            "interval": self.interval,
+            "direction": direction,
+            "strength": float(strength),
+            "at": close_time,
+            "price": price,
+        }
 
 
 class TrendSignalGen(SignalGenerator):
-    """EMA + (TR fast EWM / ATR slow) oranı ile teyit edilen trend sinyali."""
+    """
+    EMA kesişimi + volatilite breakout + hysteresis ile teyit.
+    - Kesişim (UP/DOWN) son 'confirm_bars' içinde en az bir kez oluşmuş olmalı
+    - Aynı pencerede (TR_fast_EWM / ATR_slow) > ratio_th görülmeli
+    - Son bar'da normalize EMA farkı >= hysteresis_th olmalı
+    Çıktı: direction="UP"/"DOWN", strength=(ratio - ratio_th) [son bar]
+    """
 
     def __init__(
         self,
-        client,
-        name, symbol, interval,
+        name: str, symbol: str, interval: str,
         *,
-        ema_short_window=7, ema_long_window=25,
-        atr_window=14, tr_fast_window=3, ratio_th=1.2,
-        hysteresis_threshold=0.002,
-        confirmation_bars=5
+        ema_short_window: int = 7,
+        ema_long_window: int = 25,
+        atr_window: int = 14,
+        tr_fast_window: int = 3,
+        ratio_th: float = 1.0,
+        hysteresis_th: float = 0.002,
+        confirm_bars: int = 3,
     ):
-        super().__init__(client, name, symbol, interval)
+        super().__init__(name, symbol, interval)
         self.ema_short_window = ema_short_window
         self.ema_long_window = ema_long_window
         self.atr_window = atr_window
         self.tr_fast_window = tr_fast_window
         self.ratio_th = ratio_th
-        self.hysteresis_threshold = hysteresis_threshold
-        self.confirmation_bars = confirmation_bars
+        self.hysteresis_th = hysteresis_th
+        self.confirm_bars = confirm_bars
 
-    async def check(self, df: pd.DataFrame) -> Optional[str]:
-        """
-        Args:
-            df: OHLCV DataFrame.
-        Return:
-            Optional[str]: LONG/SHORT veya None.
-        """
-        if df.empty:
-            return None
+    async def check(
+        self, 
+        df: pd.DataFrame = None, 
+        client: PublicClient = None
+    ) -> Optional[Signal]:
+        base_need = max(
+            self.ema_short_window,
+            self.ema_long_window,
+            self.atr_window,
+            self.tr_fast_window,
+        )
+        need = base_need + self.confirm_bars + 2
 
-        # Yeterli veri kontrolü
-        need = max(self.ema_short_window, self.ema_long_window, self.atr_window, self.tr_fast_window)
-        if len(df) < need + self.confirmation_bars + 2:
+        # df yoksa client'tan çek
+        if df is None:
+            if client is None:
+                return None
+            try:
+                df = client.fetch_ohlcv(
+                    symbol=self.symbol,
+                    interval=self.interval,
+                    limit=need,
+                    last_candle_completed=True,
+                )
+            except Exception:
+                return None
+
+        if df is None or df.empty or len(df) < need:
             return None
 
         df = df.copy()
 
         # EMA'lar
-        df['ema_short'] = ta.trend.ema_indicator(df['close'], window=self.ema_short_window)
-        df['ema_long']  = ta.trend.ema_indicator(df['close'], window=self.ema_long_window)
+        df["ema_short"] = ta.trend.ema_indicator(df["close"], window=self.ema_short_window)
+        df["ema_long"]  = ta.trend.ema_indicator(df["close"], window=self.ema_long_window)
 
-        # Slow volatilite seviyesi: ATR (Wilder/RMA tabanlı; ta kütüphanesi uygular)
-        df['atr_slow'] = ta.volatility.average_true_range(
-            high=df['high'], low=df['low'], close=df['close'], window=self.atr_window
+        # Slow volatilite seviyesi: ATR
+        df["atr_slow"] = ta.volatility.average_true_range(
+            high=df["high"], low=df["low"], close=df["close"], window=self.atr_window
         )
 
-        # True Range (TR)
-        prev_close = df['close'].shift(1)
-        tr1 = df['high'] - df['low']
-        tr2 = (df['high'] - prev_close).abs()
-        tr3 = (df['low']  - prev_close).abs()
-        df['tr'] = np.maximum.reduce([tr1, tr2, tr3])
+        # True Range (TR) — gap'ler dahil
+        prev_close = df["close"].shift(1)
+        tr1 = df["high"] - df["low"]
+        tr2 = (df["high"] - prev_close).abs()
+        tr3 = (df["low"]  - prev_close).abs()
+        df["tr"] = np.maximum.reduce([tr1, tr2, tr3])
 
-        # Hızlı volatilite: TR üzerinde EWM (son mumlara ağırlık verir; lag düşük)
-        df['tr_fast'] = df['tr'].ewm(span=self.tr_fast_window, adjust=False, min_periods=self.tr_fast_window).mean()
+        # Hızlı volatilite: TR üzerinde EWM (son barlara ağırlık verir)
+        df["tr_fast"] = df["tr"].ewm(
+            span=self.tr_fast_window, adjust=False, min_periods=self.tr_fast_window
+        ).mean()
 
-        # Oran: son mum etkisi / normal volatilite seviyesi
-        ratio = (df['tr_fast'] / (df['atr_slow'] + 1e-12)).replace([np.inf, -np.inf], np.nan)
+        # Oran serisi
+        ratio = (df["tr_fast"] / (df["atr_slow"] + 1e-12)).replace([np.inf, -np.inf], np.nan)
 
-        # Sinyal arama: EMA kesişimi + volatilite breakout + hysteresis
-        trade_signal = None
-        cross = None
-        atr_ok = False
+        # Pencere içinde "kesişim oldu mu?" ve "ratio eşiği aşıldı mı?" durumunu izleyelim
+        cross: Optional[str] = None   # "UP" | "DOWN"
+        vola_ok = False
 
-        for i in range(-self.confirmation_bars - 1, 0):
+        for i in range(-self.confirm_bars - 1, 0):
             curr = df.iloc[i]
             prev = df.iloc[i - 1]
 
-            # EMA kesişimleri
-            up = prev['ema_short'] < prev['ema_long'] and curr['ema_short'] > curr['ema_long']
-            dn = prev['ema_short'] > prev['ema_long'] and curr['ema_short'] < curr['ema_long']
+            up = prev["ema_short"] < prev["ema_long"] and curr["ema_short"] > curr["ema_long"]
+            dn = prev["ema_short"] > prev["ema_long"] and curr["ema_short"] < curr["ema_long"]
             if up:
                 cross = "UP"
-                atr_ok = False
+                vola_ok = False  # kesişim sonrası volatilite şartını yeniden ara
             elif dn:
-                cross = "DN"
-                atr_ok = False
+                cross = "DOWN"
+                vola_ok = False
 
-            # Volatilite breakout: son mum odaklı TR hızlısı, ATR'e göre anlamlı yüksek mi?
             r = ratio.iloc[i]
             if pd.notna(r) and r > self.ratio_th:
-                atr_ok = True
+                vola_ok = True
 
-            # Hysteresis ile teyit (EMA farkı yeterince açılmış mı?)
-            if cross and atr_ok:
-                base = max(abs(curr['ema_long']), 1e-12)
-                diff = (curr['ema_short'] - curr['ema_long']) / base
-                if abs(diff) >= self.hysteresis_threshold:
-                    if i == -1:
-                        trade_signal = self.LONG if cross == "UP" else self.SHORT
-                    break
+            # Son bar’a gelince hysteresis ile teyit
+            if i == -1 and cross and vola_ok:
+                base = max(abs(curr["ema_long"]), 1e-12)
+                diff_norm = (curr["ema_short"] - curr["ema_long"]) / base
+                if abs(diff_norm) >= self.hysteresis_th:
+                    close_time = int(curr.get("close_time", 0))
+                    price = float(curr.get("close", np.nan))
+                    strength = float(r - self.ratio_th) if pd.notna(r) else 0.0
+                    return {
+                        "name": self.name,
+                        "symbol": self.symbol,
+                        "interval": self.interval,
+                        "direction": "UP" if cross == "UP" else "DOWN",
+                        "strength": strength,
+                        "at": close_time,
+                        "price": price,
+                    }
 
-        return trade_signal
-
+        return None
