@@ -76,11 +76,11 @@ def format_signal_message(sig: Signal) -> str:
     Beklenen alanlar:
       name, symbol, interval, direction("UP"|"DOWN"|None), strength, at, price
     """
-    name = sig.get("at", "-")
-    symbol = sig.get("symbol", "-")
-    interval = sig.get("interval", "-")
-    direction = sig.get("direction")
-    strength = sig.get("strength")
+    name = sig["name"]
+    symbol = sig["symbol"]
+    interval = sig["interval"]
+    direction = sig["direction"]
+    strength = sig.get("strength", 0.0)
     ts = sig.get("at")
     price = sig.get("price")
 
@@ -92,7 +92,7 @@ def format_signal_message(sig: Signal) -> str:
     lines = [
         f"{arrow} <b>{name}</b>",
         f"• {symbol} / {interval}",
-        f"• direction: <b>{direction or '-'}</b>",
+        f"• direction: <b>{direction}</b>",
         f"• strength: <code>{st_txt}</code>",
         f"• price: <code>{pr_txt}</code>",
         f"• at: <code>{ts_txt}</code>",

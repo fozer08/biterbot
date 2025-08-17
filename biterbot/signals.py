@@ -139,7 +139,7 @@ class TrendSignalGen(SignalGenerator):
         self.ratio_th = ratio_th
         self.hysteresis_th = hysteresis_th
         self.confirm_bars = confirm_bars
-
+    
     async def check(
         self, 
         df: pd.DataFrame = None, 
@@ -193,9 +193,6 @@ class TrendSignalGen(SignalGenerator):
             span=self.tr_fast_window, adjust=False, min_periods=self.tr_fast_window
         ).mean()
 
-        # Oran serisi
-        ratio = (df["tr_fast"] / (df["atr_slow"] + 1e-12)).replace([np.inf, -np.inf], np.nan)
-
         # Pencere içinde "kesişim oldu mu?" ve "ratio eşiği aşıldı mı?" durumunu izleyelim
         cross: Optional[str] = None   # "UP" | "DOWN"
         vola_ok = False
@@ -213,26 +210,27 @@ class TrendSignalGen(SignalGenerator):
                 cross = "DOWN"
                 vola_ok = False
 
-            r = ratio.iloc[i]
-            if pd.notna(r) and r > self.ratio_th:
+            r = curr["tr_fast"] / curr["atr_slow"]
+            if r > self.ratio_th:
                 vola_ok = True
 
-            # Son bar’a gelince hysteresis ile teyit
-            if i == -1 and cross and vola_ok:
-                base = max(abs(curr["ema_long"]), 1e-12)
-                diff_norm = (curr["ema_short"] - curr["ema_long"]) / base
-                if abs(diff_norm) >= self.hysteresis_th:
-                    close_time = int(curr.get("close_time", 0))
-                    price = float(curr.get("close", np.nan))
-                    strength = float(r - self.ratio_th) if pd.notna(r) else 0.0
-                    return {
-                        "name": self.name,
-                        "symbol": self.symbol,
-                        "interval": self.interval,
-                        "direction": "UP" if cross == "UP" else "DOWN",
-                        "strength": strength,
-                        "at": close_time,
-                        "price": price,
-                    }
-
+            if cross and vola_ok:
+                hysteresis = (curr["ema_short"] - curr["ema_long"]) / curr["ema_long"]
+                if abs(hysteresis) >= self.hysteresis_th:
+                    if i == -1:
+                        close_time = int(curr.get("close_time", 0))
+                        price = float(curr.get("close", np.nan))
+                        strength = float(r - self.ratio_th)
+                        return {
+                            "name": self.name,
+                            "symbol": self.symbol,
+                            "interval": self.interval,
+                            "direction": "UP" if cross == "UP" else "DOWN",
+                            "strength": strength,
+                            "at": close_time,
+                            "price": price,
+                        }
+                    else:
+                        break
+    
         return None

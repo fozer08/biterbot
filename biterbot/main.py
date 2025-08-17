@@ -23,7 +23,7 @@ async def main():
     )
 
     # Sinyaller
-    SignalAdaptor(
+    tsa = SignalAdaptor(
         bus,
         TrendSignalGen("Trend_ETHUSDT_15m", "ETHUSDT", "15m", hysteresis_th=0.002),
         TrendSignalGen("Trend_ETHUSDT_1h",  "ETHUSDT", "1h",  hysteresis_th=0.005),
@@ -34,7 +34,8 @@ async def main():
         TrendSignalGen("Trend_SOLUSDT_15m", "SOLUSDT", "15m", hysteresis_th=0.002),
         TrendSignalGen("Trend_SOLUSDT_1h",  "SOLUSDT", "1h",  hysteresis_th=0.005),
         TrendSignalGen("Trend_SOLUSDT_4h",  "SOLUSDT", "4h",  hysteresis_th=0.010),
-    ).bind()
+    )
+    tsa.bind()
 
     # Telegram entegrasyonu
     tg = TelegramSink(
