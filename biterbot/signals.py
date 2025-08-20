@@ -24,9 +24,9 @@ class SignalGenerator(ABC):
     """
     Gösterge katmanı: check(df) bir 'signal' (dict) döndürür ya da None.
     """
+    name = "SignalGenerator"
 
-    def __init__(self, name: str, symbol: str, interval: str):
-        self.name = name
+    def __init__(self, symbol: str, interval: str):
         self.symbol = symbol
         self.interval = interval
 
@@ -48,15 +48,16 @@ class SignalGenerator(ABC):
 
 class EMACrossSignalGen(SignalGenerator):
     """Kısa/uzun EMA kesişimini 'direction' ve 'strength' ile bildirir."""
+    name = "EMA Cross" 
 
     def __init__(
         self,
-        name: str, symbol: str, interval: str,
+        symbol: str, interval: str,
         *,
         ema_short_window: int = 7,
         ema_long_window: int = 25,
     ):
-        super().__init__(name, symbol, interval)
+        super().__init__(symbol, interval)
         self.ema_short_window = ema_short_window
         self.ema_long_window = ema_long_window
 
@@ -118,10 +119,11 @@ class TrendSignalGen(SignalGenerator):
     - Son bar'da normalize EMA farkı >= hysteresis_th olmalı
     Çıktı: direction="UP"/"DOWN", strength=(ratio - ratio_th) [son bar]
     """
+    name = "Trend Signal"
 
     def __init__(
         self,
-        name: str, symbol: str, interval: str,
+        symbol: str, interval: str,
         *,
         ema_short_window: int = 7,
         ema_long_window: int = 25,
@@ -131,7 +133,7 @@ class TrendSignalGen(SignalGenerator):
         hysteresis_th: float = 0.002,
         confirm_bars: int = 3,
     ):
-        super().__init__(name, symbol, interval)
+        super().__init__(symbol, interval)
         self.ema_short_window = ema_short_window
         self.ema_long_window = ema_long_window
         self.atr_window = atr_window
