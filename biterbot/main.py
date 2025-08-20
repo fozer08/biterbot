@@ -25,15 +25,18 @@ async def main():
     # Sinyaller
     tsa = SignalAdaptor(
         bus,
-        TrendSignalGen("ETHUSDT", "15m", hysteresis_th=0.005, confirm_bars=5),
-        TrendSignalGen("ETHUSDT", "1h",  hysteresis_th=0.010, confirm_bars=5),
-        TrendSignalGen("ETHUSDT", "4h",  hysteresis_th=0.015),
-        TrendSignalGen("XRPUSDT", "15m", hysteresis_th=0.005, confirm_bars=5),
-        TrendSignalGen("XRPUSDT", "1h",  hysteresis_th=0.010, confirm_bars=5),
-        TrendSignalGen("XRPUSDT", "4h",  hysteresis_th=0.015),
-        TrendSignalGen("SOLUSDT", "15m", hysteresis_th=0.005, confirm_bars=5),
-        TrendSignalGen("SOLUSDT", "1h",  hysteresis_th=0.010, confirm_bars=5),
-        TrendSignalGen("SOLUSDT", "4h",  hysteresis_th=0.015),
+        TrendSignalGen("BTCUSDT", "15m", hysteresis_th=0.003, confirm_bars=5),
+        TrendSignalGen("BTCUSDT", "1h",  hysteresis_th=0.005, confirm_bars=5),
+        TrendSignalGen("BTCUSDT", "4h",  hysteresis_th=0.010),
+        TrendSignalGen("ETHUSDT", "15m", hysteresis_th=0.003, confirm_bars=5),
+        TrendSignalGen("ETHUSDT", "1h",  hysteresis_th=0.005, confirm_bars=5),
+        TrendSignalGen("ETHUSDT", "4h",  hysteresis_th=0.010),
+        TrendSignalGen("XRPUSDT", "15m", hysteresis_th=0.003, confirm_bars=5),
+        TrendSignalGen("XRPUSDT", "1h",  hysteresis_th=0.005, confirm_bars=5),
+        TrendSignalGen("XRPUSDT", "4h",  hysteresis_th=0.010),
+        TrendSignalGen("SOLUSDT", "15m", hysteresis_th=0.003, confirm_bars=5),
+        TrendSignalGen("SOLUSDT", "1h",  hysteresis_th=0.005, confirm_bars=5),
+        TrendSignalGen("SOLUSDT", "4h",  hysteresis_th=0.010),
     )
     tsa.bind()
 
